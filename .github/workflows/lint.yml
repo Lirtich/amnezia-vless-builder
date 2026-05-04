@@ -1,0 +1,36 @@
+name: Lint and Format Check
+
+on:
+  push:
+    branches: [main, master, develop]
+  pull_request:
+    branches: [main, master, develop]
+
+jobs:
+  lint:
+    name: Lint Check
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.22"
+          cache: true
+
+      - name: Run golangci-lint
+        uses: golangci/golangci-lint-action@v7
+        with:
+          version: latest
+          args: --timeout=5m
+
+      - name: Check formatting
+        run: |
+          if [ -n "$(go fmt ./...)" ]; then
+            echo "[ERROR] Code is not properly formatted. Run 'go fmt ./...' to fix."
+            exit 1
+          fi
+          echo "[OK] Code formatting is correct"

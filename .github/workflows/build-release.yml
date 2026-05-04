@@ -1,0 +1,134 @@
+name: Build and Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version to build (e.g., v1.0.0)'
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Build ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        include:
+          # Linux x86_64
+          - os: ubuntu-latest
+            goos: linux
+            goarch: amd64
+            artifact_name: amnezia-vless-builder
+            asset_name: amnezia-vless-builder-linux-amd64
+          # macOS Intel
+          - os: macos-latest
+            goos: darwin
+            goarch: amd64
+            artifact_name: amnezia-vless-builder
+            asset_name: amnezia-vless-builder-macos-amd64
+          # macOS Apple Silicon
+          - os: macos-latest
+            goos: darwin
+            goarch: arm64
+            artifact_name: amnezia-vless-builder
+            asset_name: amnezia-vless-builder-macos-arm64
+          # Windows
+          - os: windows-latest
+            goos: windows
+            goarch: amd64
+            artifact_name: amnezia-vless-builder.exe
+            asset_name: amnezia-vless-builder-windows-amd64.exe
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.22'
+          cache: true
+
+      - name: Build for ${{ matrix.goos }}-${{ matrix.goarch }}
+        env:
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+          CGO_ENABLED: 0
+        run: |
+          go build -o ${{ matrix.artifact_name }} -v ./cmd/amnezia-vless-builder
+
+      - name: Create archive (Linux/macOS)
+        if: matrix.goos != 'windows'
+        run: |
+          tar -czf ${{ matrix.asset_name }}.tar.gz ${{ matrix.artifact_name }} README.md LICENSE
+          shasum -a 256 ${{ matrix.asset_name }}.tar.gz > ${{ matrix.asset_name }}.tar.gz.sha256
+
+      - name: Create archive (Windows)
+        if: matrix.goos == 'windows'
+        shell: pwsh
+        run: |
+          Compress-Archive -Path "${{ matrix.artifact_name }}", "README.md", "LICENSE" -DestinationPath "${{ matrix.asset_name }}.zip"
+          $hash = (Get-FileHash -Path "${{ matrix.asset_name }}.zip" -Algorithm SHA256).Hash
+          "$hash  ${{ matrix.asset_name }}.zip" | Out-File -FilePath "${{ matrix.asset_name }}.zip.sha256" -Encoding utf8
+
+      - name: Upload Linux/macOS artifacts
+        if: matrix.goos != 'windows'
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.asset_name }}
+          path: |
+            ${{ matrix.asset_name }}.tar.gz
+            ${{ matrix.asset_name }}.tar.gz.sha256
+
+      - name: Upload Windows artifacts
+        if: matrix.goos == 'windows'
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.asset_name }}
+          path: |
+            ${{ matrix.asset_name }}.zip
+            ${{ matrix.asset_name }}.zip.sha256
+
+  release:
+    name: Create Release
+    needs: build
+    runs-on: ubuntu-latest
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/')
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: ./release_artifacts
+
+      - name: Prepare release files
+        run: |
+          mkdir -p release_files
+          find release_artifacts -type f \( -name "*.tar.gz" -o -name "*.zip" -o -name "*.sha256" \) -exec cp {} release_files/ \;
+          ls -lah release_files/
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v1
+        with:
+          files: release_files/*
+          draft: false
+          prerelease: false
+          generate_release_notes: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Display release info
+        run: |
+          echo "✅ Release created successfully!"
+          echo "📦 Files uploaded to GitHub Releases"
+          echo "Release tag: ${{ github.ref_name }}"
